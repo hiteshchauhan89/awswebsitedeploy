@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: A template for static hosting using S3 bucket and CloudFront using Legacy OAI with Auto Bucket Policy
+
+Resources:
+  # S3 Bucket for Static Website
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: "friend-heritagebenefitsnj"
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+
+  # CloudFront Origin Access Identity (Legacy OAI)
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: "OAI for friend-heritagebenefitsnj"
+
+  # S3 Bucket Policy (Automatically Grants CloudFront OAI Access)
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${S3Bucket}/*"
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn:
+      - S3Bucket
+      - CloudFrontOriginAccessIdentity
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Aliases: 
+          - friend.heritagebenefitsnj.com
+        ViewerCertificate:
+          AcmCertificateArn: "arn:aws:acm:us-east-1:850995532146:certificate/09c3f5bb-a417-4263-bbc7-b5246bca44b0"
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only
+        Origins:
+          - Id: friend-heritagebenefitsnj
+            DomainName: !GetAtt S3Bucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
+
+        DefaultCacheBehavior:
+          TargetOriginId: friend-heritagebenefitsnj
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+
+Outputs:
+  CloudFrontURL:
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+    Description: "The CloudFront distribution URL for the static website"
