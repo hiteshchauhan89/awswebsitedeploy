@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS CloudFormation template to create an S3 website with CloudFront and Route 53.'
+
+Parameters:
+  HostedZone:
+    Type: String
+    Description: The DNS name of an existing Amazon Route 53 hosted zone
+  DomainName:
+    Type: String
+    Description: The primary domain name for the website (e.g., example.com)
+
+Resources:
+  # S3 Bucket for Website Hosting
+  S3BucketForWebsite:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DomainName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+
+  # CloudFront Origin Access Control (OAC) for secure S3 access
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: "S3-OAC"
+        Description: "OAC for secure access to S3"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # CloudFront Distribution
+  WebsiteCDN:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: "CDN for S3-backed website"
+        Enabled: true
+        DefaultRootObject: index.html
+        Aliases:
+          - !Ref DomainName
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt S3BucketForWebsite.RegionalDomainName # ✅ FIXED: Use RegionalDomainName
+            S3OriginConfig: {}  # ✅ FIXED: Use S3OriginConfig instead of CustomOriginConfig
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+
+  # Route 53 DNS Record for CloudFront
+  WebsiteDNSName:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Ref HostedZone
+      Comment: "CNAME redirect custom name to CloudFront distribution"
+      Name: !Ref DomainName
+      Type: CNAME
+      TTL: '900'
+      ResourceRecords:
+        - !GetAtt WebsiteCDN.DomainName
+
+Outputs:
+  WebsiteURL:
+    Value: !Sub "https://${DomainName}"
+    Description: "The CloudFront URL for the website"
+
+  BucketName:
+    Value: !Ref S3BucketForWebsite
+    Description: "Name of the S3 bucket used for hosting"

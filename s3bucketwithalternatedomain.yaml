@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Create an S3 website with CloudFront, SSL, and CloudFront Function'
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: 'The full domain name for the website (e.g., example.com)'
+  HostedZone:
+    Type: String
+    Description: 'The DNS name of an existing Amazon Route 53 hosted zone'
+  CertificateArn:
+    Type: String
+    Description: 'ARN of the ACM certificate for HTTPS (must be in us-east-1)'
+
+Resources:
+  # S3 Bucket for Website Hosting
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DomainName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+
+  # CloudFront Function (Example: Redirect HTTP to HTTPS)
+  CloudFrontFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: "RedirectToHTTPS"
+      FunctionConfig:
+        Comment: "Redirect HTTP to HTTPS"
+        Runtime: cloudfront-js-1.0
+      AutoPublish: true
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          if (request.headers['x-forwarded-proto'].value !== 'https') {
+            return {
+              statusCode: 301,
+              statusDescription: 'Moved Permanently',
+              headers: { 
+                'location': { 'value': 'https://' + request.headers['host'].value + request.uri }
+              }
+            };
+          }
+          return request;
+        }
+
+  # CloudFront Distribution
+  WebsiteCDN:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Aliases:
+          - !Ref DomainName
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt WebsiteBucket.RegionalDomainName
+            S3OriginConfig: {}
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: 
+            - GET
+            - HEAD
+          CachedMethods: 
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt CloudFrontFunction.FunctionARN
+              
+   ViewerCertificate:
+     AcmCertificateArn: !Ref CertificateArn
+     SslSupportMethod: sni-only
+
+
+  # Route 53 DNS Record
+  WebsiteDNSName:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub "${HostedZone}."
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt WebsiteCDN.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront Hosted Zone ID (fixed value)
+
+Outputs:
+  WebsiteURL:
+    Value: !Sub "https://${DomainName}"
+    Description: "The CloudFront URL for the website"
+  BucketName:
+    Value: !Ref WebsiteBucket
+    Description: "The S3 bucket used for hosting the website"
